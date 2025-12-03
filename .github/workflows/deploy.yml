@@ -3,12 +3,11 @@ name: Deploy to NPM
 on:
   push:
     branches:
-      - main # ⚠️ 본인의 기본 브랜치 이름과 같아야 합니다 (main 또는 master)
+      - main
 
-# 👇 이 부분이 제일 중요합니다 (NPM과 신뢰 연결)
 permissions:
   contents: read
-  id-token: write
+  id-token: write # ⭐ [핵심] OIDC 인증을 위한 필수 권한
 
 jobs:
   publish:
@@ -20,10 +19,11 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
+          # ⭐ setup-node가 이 url을 보고 OIDC 토큰을 자동으로 생성해서 연결해줍니다.
 
-      - run: npm ci
+      # lock 파일 문제 방지를 위해 install로 변경 (ci로 해도 무방하지만 안전하게)
+      - run: npm install
 
-      # 👇 --provenance 옵션이 있어야 Trusted Publishing이 작동합니다.
+      # 👇 [수정됨] env 설정을 완전히 삭제했습니다.
+      # setup-node가 이미 인증 준비를 마쳤으므로 명령어만 실행하면 됩니다.
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
