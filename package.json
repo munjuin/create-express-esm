@@ -1,6 +1,6 @@
 {
   "name": "create-express-esm",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "A modern CLI tool to bootstrap Express.js applications with ES Modules and Layered Architecture.",
   "main": "index.js",
   "type": "module",
@@ -13,7 +13,8 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "release": "npm version patch && git push origin main --tags"
+    "release": "npm version patch && git push origin main --tags",
+    "pre-push": "npm version patch --no-git-tag-version && git add package.json"
   },
   "keywords": [
     "express",
