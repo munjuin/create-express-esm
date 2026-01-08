@@ -1,6 +1,6 @@
 {
   "name": "create-express-esm",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "A modern CLI tool to bootstrap Express.js applications with ES Modules and Layered Architecture.",
   "main": "index.js",
   "type": "module",
