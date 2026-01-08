@@ -29,15 +29,13 @@
 
 ```bash
 npx create-express-esm
-npm install -g create-express-esm
-npm install create-express-esm
+create-express-esm
 ```
 
 또는 전역으로 설치하여 사용할 수도 있습니다
 
 ```
 npm install -g create-express-esm
-create-express-esm
 ```
 
 ## 📂 Project Structure (폴더 구조)
