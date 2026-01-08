@@ -3,17 +3,26 @@
   "version": "1.1.2",
   "description": "A modern CLI tool to bootstrap Express.js applications with ES Modules and Layered Architecture.",
   "main": "index.js",
+  "type": "module",
   "bin": {
-    "create-express-esm": "./bin/cli.js"
+    "create-express-esm": "bin/cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/munjuin/create-express-esm.git"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "deploy": "npm version patch && git push origin main --tags && npm publish"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
+  "keywords": [
+    "express",
+    "esm",
+    "cli",
+    "boilerplate"
+  ],
+  "author": "munjuin",
+  "license": "MIT",
   "dependencies": {
     "chalk": "^5.6.2",
     "commander": "^14.0.2",
@@ -23,5 +32,9 @@
   "files": [
     "bin",
     "template"
-  ]
+  ],
+  "bugs": {
+    "url": "https://github.com/munjuin/create-express-esm/issues"
+  },
+  "homepage": "https://github.com/munjuin/create-express-esm#readme"
 }
