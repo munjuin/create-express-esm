@@ -27,3 +27,5 @@ jobs:
       # 👇 [수정됨] env 설정을 완전히 삭제했습니다.
       # setup-node가 이미 인증 준비를 마쳤으므로 명령어만 실행하면 됩니다.
       - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm_key }} # Optional: If you want to use a secret token as a fallback
