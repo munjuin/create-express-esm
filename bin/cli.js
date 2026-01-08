@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-import { program } from 'commander';
-import inquirer from 'inquirer';
+import { input, select } from '@inquirer/prompts'; // 현대적인 방식으로 교체
 import fs from 'fs-extra';
 import path from 'path';
 import chalk from 'chalk';
@@ -12,89 +11,100 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-program
-  .version('1.1.0') // 이슈 해결을 반영하여 버전 상향
-  .description('Layered Architecture 기반의 Modern Express 프로젝트 생성기');
+// 1.2.0 버전 정보 및 메인 로직
+async function run() {
+  console.log(chalk.blue.bold('\n🚀 Create Express ESM 시작!\n'));
 
-program
-  .action(async () => {
-    console.log(chalk.blue.bold('\n🚀 Create Express ESM 시작!\n'));
+  try {
+    // 1. 사용자 질문 (비동기 함수 방식으로 변경)
+    const projectName = await input({
+      message: '생성할 프로젝트 이름을 입력하세요:',
+      default: 'my-app',
+    });
 
-    // 1. 사용자 질문
-    const answers = await inquirer.prompt([
-      {
-        type: 'input',
-        name: 'projectName',
-        message: '생성할 프로젝트 이름을 입력하세요:',
-        default: 'my-app',
-      }
-    ]);
+    const language = await select({
+      message: '사용할 언어를 선택하세요:',
+      choices: [
+        { name: 'JavaScript (ESM)', value: 'js' },
+        { name: 'TypeScript', value: 'ts' },
+      ],
+    });
 
-    const { projectName } = answers;
     const targetPath = path.join(process.cwd(), projectName);
-    const templatePath = path.join(__dirname, '../template');
+    const templatePath = path.join(__dirname, '../template', language);
 
-    // 2. 템플릿 복사 및 환경 설정
-    try {
-      if (fs.existsSync(targetPath)) {
-        console.error(chalk.red(`❌ 오류: '${projectName}' 폴더가 이미 존재합니다.`));
-        process.exit(1);
-      }
-      
-      console.log(chalk.cyan(`\n📂 템플릿을 복사하는 중...`));
-      await fs.copy(templatePath, targetPath);
+    // 2. 폴더 존재 여부 확인
+    if (fs.existsSync(targetPath)) {
+      console.error(chalk.red(`\n❌ 오류: '${projectName}' 폴더가 이미 존재합니다.`));
+      process.exit(1);
+    }
 
-      /**
-       * [이슈 #1 해결] 도트 파일(Dotfiles) 이름 변경 로직
-       * NPM 배포 시 무시되는 .gitignore와 .env를 처리합니다.
-       */
-      const renameMap = {
-        'gitignore': '.gitignore', // 기존 사용 방식 대응
-        '_gitignore': '.gitignore', // 신규 권장 방식 대응
-        '_env': '.env'              // .env 대응
-      };
+    // 3. 템플릿 복사
+    console.log(chalk.cyan(`\n📂 [${language.toUpperCase()}] 템플릿을 복사하는 중...`));
+    
+    if (!fs.existsSync(templatePath)) {
+      console.error(chalk.red(`\n❌ 오류: ${language} 템플릿 폴더를 찾을 수 없습니다.`));
+      console.log(chalk.gray(`경로 확인: ${templatePath}`));
+      process.exit(1);
+    }
 
-      for (const [oldName, newName] of Object.entries(renameMap)) {
-        const oldFilePath = path.join(targetPath, oldName);
-        const newFilePath = path.join(targetPath, newName);
+    await fs.copy(templatePath, targetPath);
 
-        if (await fs.pathExists(oldFilePath)) {
-          await fs.move(oldFilePath, newFilePath, { overwrite: true });
-          
-          // .env가 생성될 때 .env.example도 함께 생성 (DX 개선)
-          if (newName === '.env') {
-            const exampleEnvPath = path.join(targetPath, '.env.example');
-            await fs.copy(newFilePath, exampleEnvPath);
-          }
+    // 4. 도트 파일 변환 및 환경 설정
+    const renameMap = {
+      'gitignore': '.gitignore',
+      '_gitignore': '.gitignore',
+      '_env': '.env'
+    };
+
+    for (const [oldName, newName] of Object.entries(renameMap)) {
+      const oldFilePath = path.join(targetPath, oldName);
+      const newFilePath = path.join(targetPath, newName);
+
+      if (await fs.pathExists(oldFilePath)) {
+        await fs.move(oldFilePath, newFilePath, { overwrite: true });
+        if (newName === '.env') {
+          const exampleEnvPath = path.join(targetPath, '.env.example');
+          await fs.copy(newFilePath, exampleEnvPath);
         }
       }
-      
-      // 3. package.json 프로젝트 이름 수정
-      const pkgPath = path.join(targetPath, 'package.json');
-      if (await fs.pathExists(pkgPath)) {
-        const pkg = await fs.readJson(pkgPath);
-        pkg.name = projectName;
-        await fs.writeJson(pkgPath, pkg, { spaces: 2 });
-      }
-      
-      console.log(chalk.green(`✅ 템플릿 구성 및 환경 설정 완료!`));
-
-      // 4. 패키지 자동 설치
-      console.log(chalk.yellow(`\n📦 패키지 자동 설치를 진행합니다... (npm install)`));
-      
-      execSync('npm install', { 
-        cwd: targetPath, 
-        stdio: 'inherit' 
-      });
-
-      console.log(chalk.green(`\n✨ 모든 설치가 완료되었습니다!`));
-      console.log(chalk.white(`\n다음 명령어로 시작하세요:\n`));
-      console.log(chalk.cyan(`   cd ${projectName}`));
-      console.log(chalk.cyan(`   npm run dev\n`));
-
-    } catch (error) {
-      console.error(chalk.red('\n❌ 프로젝트 생성 중 오류 발생:'), error);
     }
-  });
+    
+    // 5. package.json 프로젝트 이름 수정
+    const pkgPath = path.join(targetPath, 'package.json');
+    if (await fs.pathExists(pkgPath)) {
+      const pkg = await fs.readJson(pkgPath);
+      pkg.name = projectName;
+      await fs.writeJson(pkgPath, pkg, { spaces: 2 });
+    }
+    
+    console.log(chalk.green(`✅ 템플릿 구성 완료!`));
 
-program.parse(process.argv);
+    // 6. 패키지 자동 설치
+    console.log(chalk.yellow(`\n📦 패키지 자동 설치를 진행합니다... (npm install)`));
+    
+    execSync('npm install', { 
+      cwd: targetPath, 
+      stdio: 'inherit' 
+    });
+
+    console.log(chalk.green(`\n✨ 모든 설치가 완료되었습니다!`));
+    console.log(chalk.white(`\n다음 명령어로 시작하세요:\n`));
+    console.log(chalk.cyan(`   cd ${projectName}`));
+    if (language === 'ts') {
+      console.log(chalk.cyan(`   npm run dev (또는 npm run build)`));
+    } else {
+      console.log(chalk.cyan(`   npm run dev`));
+    }
+    console.log('\n');
+
+  } catch (error) {
+    if (error.name === 'ExitPromptError') {
+      console.log(chalk.yellow('\n\n👋 설치를 중단했습니다.'));
+    } else {
+      console.error(chalk.red('\n❌ 오류 발생:'), error);
+    }
+  }
+}
+
+run();
