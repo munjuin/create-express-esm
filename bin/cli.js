@@ -1,52 +1,69 @@
 #!/usr/bin/env node
 
-import { input, select, confirm } from '@inquirer/prompts';
+import * as p from '@clack/prompts';
 import fs from 'fs-extra';
 import path from 'path';
 import chalk from 'chalk';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
+// ESM 환경에서 __dirname 구현
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function run() {
-  console.log(chalk.blue.bold('\n🚀 Create Express ESM 시작!\n'));
+  console.clear();
+  
+  // 1. 시작 인사 (Intro)
+  p.intro(`${chalk.bgBlue.white(' create-express-esm ')} ${chalk.dim('v1.1.9')}`);
 
   try {
-    // 1. 사용자 질문
-    const projectName = await input({
-      message: '생성할 프로젝트 이름을 입력하세요:',
-      default: 'my-app',
-    });
+    // 2. 사용자 질문 그룹 (Group)
+    const project = await p.group(
+      {
+        projectName: () =>
+          p.text({
+            message: '프로젝트 이름을 입력하세요:',
+            placeholder: 'my-app',
+            validate: (value) => {
+              if (value.length === 0) return '프로젝트 이름은 필수입니다!';
+              if (fs.existsSync(path.join(process.cwd(), value))) return '해당 폴더가 이미 존재합니다.';
+            },
+          }),
+        language: () =>
+          p.select({
+            message: '사용할 언어를 선택하세요:',
+            options: [
+              { value: 'js', label: 'JavaScript (ESM)' },
+              { value: 'ts', label: 'TypeScript' },
+            ],
+          }),
+        useTest: () =>
+          p.confirm({
+            message: 'Vitest 테스트 환경을 추가하시겠습니까?',
+            initialValue: true,
+          }),
+      },
+      {
+        onCancel: () => {
+          p.cancel('프로젝트 생성이 취소되었습니다.');
+          process.exit(0);
+        },
+      }
+    );
 
-    const language = await select({
-      message: '사용할 언어를 선택하세요:',
-      choices: [
-        { name: 'JavaScript (ESM)', value: 'js' },
-        { name: 'TypeScript', value: 'ts' },
-      ],
-    });
-
-    const useTest = await confirm({
-      message: 'Vitest 테스트 환경을 추가하시겠습니까?',
-      default: true,
-    });
-
+    const { projectName, language, useTest } = project;
     const targetPath = path.join(process.cwd(), projectName);
     const templatePath = path.join(__dirname, '../template', language);
 
-    // 2. 폴더 존재 여부 확인
-    if (fs.existsSync(targetPath)) {
-      console.error(chalk.red(`\n❌ 오류: '${projectName}' 폴더가 이미 존재합니다.`));
-      process.exit(1);
-    }
+    // 3. 파일 구성 시작 (Spinner)
+    const s = p.spinner();
+    s.start('프로젝트 템플릿을 복사하는 중...');
 
-    // 3. 기본 템플릿 복사
-    console.log(chalk.cyan(`\n📂 [${language.toUpperCase()}] 템플릿 구성을 시작합니다...`));
+    // 템플릿 전체 복사 (Vitest 파일 포함)
     await fs.copy(templatePath, targetPath);
 
-    // 4. 도트 파일 변환 (_env -> .env 등)
+    // 도트 파일 변환 (예: _env -> .env)
     const renameMap = {
       'gitignore': '.gitignore',
       '_gitignore': '.gitignore',
@@ -55,109 +72,74 @@ async function run() {
 
     for (const [oldName, newName] of Object.entries(renameMap)) {
       const oldFilePath = path.join(targetPath, oldName);
-      const newFilePath = path.join(targetPath, newName);
       if (await fs.pathExists(oldFilePath)) {
-        await fs.move(oldFilePath, newFilePath, { overwrite: true });
+        await fs.move(oldFilePath, path.join(targetPath, newName), { overwrite: true });
         if (newName === '.env') {
-          await fs.copy(newFilePath, path.join(targetPath, '.env.example'));
+            await fs.copy(path.join(targetPath, '.env'), path.join(targetPath, '.env.example'));
         }
       }
     }
-    
-    // 5. package.json 동적 수정
+
+    // 4. package.json 동적 최적화
     const pkgPath = path.join(targetPath, 'package.json');
     const pkg = await fs.readJson(pkgPath);
     pkg.name = projectName;
 
-    // [추가된 부분] TypeScript 환경에서 ESM 에러를 방지하기 위한 tsx 설정
+    // TypeScript 선택 시 실행 환경(tsx) 강제 설정
     if (language === 'ts') {
-      console.log(chalk.yellow(`⚙️  TypeScript ESM 실행 환경(tsx)을 최적화하는 중...`));
-      
-      // ts-node 대신 tsx를 사용하여 .js 확장자 임포트 문제 해결
       pkg.scripts.dev = "nodemon --exec tsx src/server.ts";
-      
-      // 의존성 교체
-      pkg.devDependencies = {
-        ...pkg.devDependencies,
-        "tsx": "^4.7.0"
-      };
-      
-      // 기존에 ts-node가 있다면 제거 (중복 방지)
-      delete pkg.devDependencies['ts-node'];
+      pkg.devDependencies["tsx"] = "^4.7.0";
+      // 구형 ts-node 제거
+      if (pkg.devDependencies["ts-node"]) delete pkg.devDependencies["ts-node"];
     }
 
-    // Vitest 설정 (이슈 #3 구현 부분)
-    if (useTest) {
-      console.log(chalk.yellow(`🧪 Vitest 설정 및 샘플 테스트를 생성하는 중...`));
-      
-      pkg.scripts = {
-        ...pkg.scripts,
-        "test": "vitest",
-        "test:ui": "vitest --ui",
-        "test:run": "vitest run"
-      };
+    // 테스트 환경 사용 여부에 따른 처리
+    const configExt = language === 'ts' ? 'ts' : 'js';
+    const testFileExt = language === 'ts' ? 'ts' : 'js';
 
-      const testDeps = {
-        "vitest": "^1.0.0",
-        "supertest": "^6.3.3"
-      };
+    if (!useTest) {
+      // 사용자가 원치 않으면 복사된 테스트 파일 삭제
+      await fs.remove(path.join(targetPath, `vitest.config.${configExt}`));
+      await fs.remove(path.join(targetPath, `src/app.test.${testFileExt}`));
 
-      if (language === 'ts') {
-        testDeps["@types/supertest"] = "^2.0.12";
-      }
-
-      pkg.devDependencies = {
-        ...pkg.devDependencies,
-        ...testDeps
-      };
-
-      // Vitest 설정 파일 생성
-      const configExt = language === 'ts' ? 'ts' : 'js';
-      const configContent = `import { defineConfig } from 'vitest/config';
-
-export default defineConfig({
-  test: {
-    globals: true,
-    environment: 'node',
-  },
-});`;
-      await fs.writeFile(path.join(targetPath, `vitest.config.${configExt}`), configContent);
-
-      // 샘플 테스트 파일 생성
-      const testFileExt = language === 'ts' ? 'ts' : 'js';
-      const testContent = `import { describe, it, expect } from 'vitest';
-import request from 'supertest';
-import app from './app.js';
-
-describe('API Health Check Test', () => {
-  it('GET / 요청이 성공해야 한다', async () => {
-    const res = await request(app).get('/');
-    expect(res.status).toBe(200);
-    expect(res.text).toContain('Server is Running');
-  });
-});`;
-      await fs.writeFile(path.join(targetPath, `src/app.test.${testFileExt}`), testContent);
+      // package.json에서 관련 설정 제거
+      delete pkg.scripts.test;
+      delete pkg.scripts["test:ui"];
+      delete pkg.scripts["test:run"];
+      delete pkg.devDependencies.vitest;
+      delete pkg.devDependencies.supertest;
+      if (pkg.devDependencies["@types/supertest"]) delete pkg.devDependencies["@types/supertest"];
+    } else {
+      // 사용자가 원하면 스크립트가 확실히 있는지 보장
+      pkg.scripts.test = "vitest";
+      pkg.scripts["test:ui"] = "vitest --ui";
     }
 
     await fs.writeJson(pkgPath, pkg, { spaces: 2 });
-    console.log(chalk.green(`✅ 모든 구성 완료!`));
+    s.stop('파일 구성 완료!');
 
-    // 6. 패키지 자동 설치
-    console.log(chalk.yellow(`\n📦 의존성 패키지를 설치합니다... (npm install)`));
-    execSync('npm install', { cwd: targetPath, stdio: 'inherit' });
+    // 5. 의존성 설치 (Spinner)
+    const installSpinner = p.spinner();
+    installSpinner.start('의존성 패키지를 설치하는 중... (npm install)');
+    
+    try {
+      execSync('npm install', { cwd: targetPath, stdio: 'ignore' });
+      installSpinner.stop('설치 완료!');
+    } catch (e) {
+      installSpinner.stop(chalk.red('설치 실패 (수동 설치가 필요할 수 있습니다)'));
+    }
 
-    console.log(chalk.green(`\n✨ 프로젝트 생성 성공!`));
-    console.log(chalk.white(`\n다음 명령어를 입력해 보세요:\n`));
-    console.log(chalk.cyan(`   cd ${projectName}`));
-    if (useTest) console.log(chalk.cyan(`   npm test`));
-    console.log(chalk.cyan(`   npm run dev\n`));
+    // 6. 마무리 (Note & Outro)
+    p.note(
+      chalk.cyan(`cd ${projectName}\n${useTest ? 'npm test\n' : ''}npm run dev`),
+      '시작하려면 다음 명령어를 입력하세요'
+    );
+
+    p.outro(chalk.green('✨ 모든 준비가 끝났습니다. 즐거운 개발 되세요!'));
 
   } catch (error) {
-    if (error.name === 'ExitPromptError') { // 오타 수정: ExitPnromptError -> ExitPromptError
-      console.log(chalk.yellow('\n\n👋 설치를 중단했습니다.'));
-    } else {
-      console.error(chalk.red('\n❌ 오류 발생:'), error);
-    }
+    p.cancel(`오류 발생: ${error.message}`);
+    process.exit(1);
   }
 }
 
