@@ -14,11 +14,11 @@ const __dirname = path.dirname(__filename);
 async function run() {
   console.clear();
   
-  // 1. 시작 인사 (Intro)
-  p.intro(`${chalk.bgBlue.white(' create-express-esm ')} ${chalk.dim('v1.1.9')}`);
+  // 1. 시작 인사
+  p.intro(`${chalk.bgBlue.white(' create-express-esm ')} ${chalk.dim('v1.2.0-beta')}`);
 
   try {
-    // 2. 사용자 질문 그룹 (Group)
+    // 2. 사용자 질문 그룹
     const project = await p.group(
       {
         projectName: () =>
@@ -43,6 +43,11 @@ async function run() {
             message: 'Vitest 테스트 환경을 추가하시겠습니까?',
             initialValue: true,
           }),
+        useDb: () =>
+          p.confirm({
+            message: 'Prisma ORM (PostgreSQL) 및 전역 에러 핸들링을 추가하시겠습니까?',
+            initialValue: false,
+          }),
       },
       {
         onCancel: () => {
@@ -52,18 +57,19 @@ async function run() {
       }
     );
 
-    const { projectName, language, useTest } = project;
+    const { projectName, language, useTest, useDb } = project;
     const targetPath = path.join(process.cwd(), projectName);
     const templatePath = path.join(__dirname, '../template', language);
+    const commonPath = path.join(__dirname, '../template/common');
 
-    // 3. 파일 구성 시작 (Spinner)
+    // 3. 파일 구성 시작
     const s = p.spinner();
     s.start('프로젝트 템플릿을 복사하는 중...');
 
-    // 템플릿 전체 복사 (Vitest 파일 포함)
+    // 기본 언어 템플릿 복사
     await fs.copy(templatePath, targetPath);
 
-    // 도트 파일 변환 (예: _env -> .env)
+    // 도트 파일 변환 (_env -> .env 등)
     const renameMap = {
       'gitignore': '.gitignore',
       '_gitignore': '.gitignore',
@@ -75,50 +81,110 @@ async function run() {
       if (await fs.pathExists(oldFilePath)) {
         await fs.move(oldFilePath, path.join(targetPath, newName), { overwrite: true });
         if (newName === '.env') {
-            await fs.copy(path.join(targetPath, '.env'), path.join(targetPath, '.env.example'));
+          await fs.copy(path.join(targetPath, '.env'), path.join(targetPath, '.env.example'));
         }
       }
     }
 
-    // 4. package.json 동적 최적화
+    // 4. DB 및 에러 핸들링 선택 시 추가 파일 복사 및 코드 주입
+    if (useDb) {
+      // (1) Prisma 설정 및 Docker Compose 복사
+      await fs.copy(path.join(commonPath, 'prisma'), path.join(targetPath, 'prisma'));
+      await fs.copy(path.join(commonPath, 'docker-compose.yml'), path.join(targetPath, 'docker-compose.yml'));
+
+      // (2) 소스 코드 복사 (lib, services, controllers, routes, utils, middlewares)
+      const sourceFolders = ['lib', 'services', 'controllers', 'routes', 'utils', 'middlewares'];
+      for (const folder of sourceFolders) {
+        const srcFolderPath = path.join(commonPath, 'src', folder);
+        const destFolderPath = path.join(targetPath, 'src', folder);
+        
+        if (await fs.pathExists(srcFolderPath)) {
+          await fs.ensureDir(destFolderPath);
+          const files = await fs.readdir(srcFolderPath);
+          for (const file of files) {
+            // 사용자가 선택한 언어(ts/js)와 일치하는 파일만 복사
+            if (file.endsWith(`.${language}`)) {
+              await fs.copy(path.join(srcFolderPath, file), path.join(destFolderPath, file));
+            }
+          }
+        }
+      }
+
+      // (3) app.ts / app.js 에 코드 주입 (중요!)
+      const mainFilePath = path.join(targetPath, `src/app.${language}`);
+      if (await fs.pathExists(mainFilePath)) {
+        let content = await fs.readFile(mainFilePath, 'utf-8');
+        
+        // 상단 임포트 주입
+        const imports = [
+          `import userRoutes from './routes/userRoutes.js';`,
+          `import { errorHandler } from './middlewares/errorMiddleware.js';`
+        ].join('\n');
+        content = imports + '\n' + content;
+
+        // 라우터 등록 주입 (express.json() 뒤에)
+        const routeCode = `\napp.use('/users', userRoutes);`;
+        content = content.replace('app.use(express.json());', `app.use(express.json());${routeCode}`);
+
+        // 전역 에러 핸들러 주입 (서버 실행 직전에)
+        const errorMiddlewareCode = `\n// 전역 에러 핸들러 (모든 라우터 다음에 위치해야 함)\napp.use(errorHandler);\n`;
+        if (content.includes('export default app;')) {
+          content = content.replace('export default app;', `${errorMiddlewareCode}\nexport default app;`);
+        } else {
+          content += `\n${errorMiddlewareCode}`;
+        }
+
+        await fs.writeFile(mainFilePath, content);
+      }
+
+      // (4) .env 파일에 DATABASE_URL 추가
+      const envPath = path.join(targetPath, '.env');
+      const dbUrlContent = `
+# PostgreSQL Connection (Docker Compose default)
+DATABASE_URL="postgresql://myuser:mypassword@localhost:5432/mydb?schema=public"
+`;
+      await fs.appendFile(envPath, dbUrlContent);
+    }
+
+    // 5. package.json 동적 최적화
     const pkgPath = path.join(targetPath, 'package.json');
     const pkg = await fs.readJson(pkgPath);
     pkg.name = projectName;
 
-    // TypeScript 선택 시 실행 환경(tsx) 강제 설정
     if (language === 'ts') {
       pkg.scripts.dev = "nodemon --exec tsx src/server.ts";
       pkg.devDependencies["tsx"] = "^4.7.0";
-      // 구형 ts-node 제거
-      if (pkg.devDependencies["ts-node"]) delete pkg.devDependencies["ts-node"];
     }
 
-    // 테스트 환경 사용 여부에 따른 처리
-    const configExt = language === 'ts' ? 'ts' : 'js';
-    const testFileExt = language === 'ts' ? 'ts' : 'js';
-
+    // 테스트 환경 설정 (비사용 시 관련 파일 및 패키지 제거)
     if (!useTest) {
-      // 사용자가 원치 않으면 복사된 테스트 파일 삭제
+      const configExt = language === 'ts' ? 'ts' : 'js';
+      const testFileExt = language === 'ts' ? 'ts' : 'js';
       await fs.remove(path.join(targetPath, `vitest.config.${configExt}`));
       await fs.remove(path.join(targetPath, `src/app.test.${testFileExt}`));
-
-      // package.json에서 관련 설정 제거
       delete pkg.scripts.test;
       delete pkg.scripts["test:ui"];
       delete pkg.scripts["test:run"];
       delete pkg.devDependencies.vitest;
       delete pkg.devDependencies.supertest;
       if (pkg.devDependencies["@types/supertest"]) delete pkg.devDependencies["@types/supertest"];
-    } else {
-      // 사용자가 원하면 스크립트가 확실히 있는지 보장
-      pkg.scripts.test = "vitest";
-      pkg.scripts["test:ui"] = "vitest --ui";
+    }
+
+    // DB 의존성 및 스크립트 추가
+    if (useDb) {
+      pkg.scripts["db:up"] = "docker-compose up -d";
+      pkg.scripts["db:push"] = "prisma db push";
+      pkg.scripts["prisma:generate"] = "prisma generate";
+      pkg.scripts["prisma:studio"] = "prisma studio";
+      
+      pkg.dependencies["@prisma/client"] = "^5.0.0";
+      pkg.devDependencies["prisma"] = "^5.0.0";
     }
 
     await fs.writeJson(pkgPath, pkg, { spaces: 2 });
     s.stop('파일 구성 완료!');
 
-    // 5. 의존성 설치 (Spinner)
+    // 6. 의존성 설치
     const installSpinner = p.spinner();
     installSpinner.start('의존성 패키지를 설치하는 중... (npm install)');
     
@@ -129,12 +195,15 @@ async function run() {
       installSpinner.stop(chalk.red('설치 실패 (수동 설치가 필요할 수 있습니다)'));
     }
 
-    // 6. 마무리 (Note & Outro)
-    p.note(
-      chalk.cyan(`cd ${projectName}\n${useTest ? 'npm test\n' : ''}npm run dev`),
-      '시작하려면 다음 명령어를 입력하세요'
-    );
+    // 7. 마무리
+    let nextSteps = `cd ${projectName}\n`;
+    if (useDb) {
+      nextSteps += `${chalk.bold('npm run db:up')} (DB 실행)\n`;
+      nextSteps += `${chalk.bold('npm run db:push')} (테이블 생성)\n`;
+    }
+    nextSteps += `npm run dev`;
 
+    p.note(chalk.cyan(nextSteps), '시작하려면 다음 명령어를 입력하세요');
     p.outro(chalk.green('✨ 모든 준비가 끝났습니다. 즐거운 개발 되세요!'));
 
   } catch (error) {
