@@ -2,12 +2,13 @@ name: Deploy to NPM
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*" # ⭐ v1.0.0, v1.2.3 등 'v'로 시작하는 태그가 푸시될 때만 실행
+  workflow_dispatch: # ⭐ GitHub Actions 탭에서 버튼을 눌러 수동으로 실행 가능
 
 permissions:
   contents: read
-  id-token: write # ⭐ [핵심] OIDC 인증을 위한 필수 권한
+  id-token: write
 
 jobs:
   publish:
@@ -19,13 +20,11 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
-          # ⭐ setup-node가 이 url을 보고 OIDC 토큰을 자동으로 생성해서 연결해줍니다.
 
-      # lock 파일 문제 방지를 위해 install로 변경 (ci로 해도 무방하지만 안전하게)
       - run: npm install
 
-      # 👇 [수정됨] env 설정을 완전히 삭제했습니다.
-      # setup-node가 이미 인증 준비를 마쳤으므로 명령어만 실행하면 됩니다.
-      - run: npm publish --provenance --access public
+      # 태그가 있을 때만 배포하거나, 수동으로 실행했을 때만 배포하도록 안전장치 추가
+      - name: Publish to NPM
+        run: npm publish --provenance --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_KEY }} # Optional: If you want to use a secret token as a fallback
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_KEY }}
