@@ -57,6 +57,7 @@ async function run() {
               { value: 'postgresql', label: 'PostgreSQL' },
               { value: 'mysql', label: 'MySQL' },
               { value: 'mariadb', label: 'MariaDB' },
+              { value: 'mongodb', label: 'MongoDB (NoSQL)' },
             ],
           });
         },
@@ -160,7 +161,9 @@ async function run() {
         dbUrlContent = `\n# MySQL Connection\nDATABASE_URL="mysql://root:mypassword@localhost:4306/mydb"\n`;
       } else if (dbType === 'mariadb') {
         dbUrlContent = `\n# MariaDB Connection\nDATABASE_URL="mysql://root:mypassword@localhost:5306/mydb"\n`; // 5306 사용
-}
+      } else if (dbType === 'mongodb') {
+        dbUrlContent = `\n# MongoDB Connection\nDATABASE_URL="mongodb://root:mypassword@localhost:27017/mydb?authSource=admin"\n`;
+      } 
       
       await fs.appendFile(envPath, dbUrlContent);
     }
