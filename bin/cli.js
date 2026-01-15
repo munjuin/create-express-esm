@@ -56,6 +56,7 @@ async function run() {
             options: [
               { value: 'postgresql', label: 'PostgreSQL' },
               { value: 'mysql', label: 'MySQL' },
+              { value: 'mariadb', label: 'MariaDB' },
             ],
           });
         },
@@ -156,8 +157,10 @@ async function run() {
       if (dbType === 'postgresql') {
         dbUrlContent = `\n# PostgreSQL Connection\nDATABASE_URL="postgresql://myuser:mypassword@localhost:5433/mydb?schema=public"\n`;
       } else if (dbType === 'mysql') {
-        dbUrlContent = `\n# MySQL Connection\nDATABASE_URL="mysql://root:mypassword@localhost:3307/mydb"\n`;
-      }
+        dbUrlContent = `\n# MySQL Connection\nDATABASE_URL="mysql://root:mypassword@localhost:4306/mydb"\n`;
+      } else if (dbType === 'mariadb') {
+        dbUrlContent = `\n# MariaDB Connection\nDATABASE_URL="mysql://root:mypassword@localhost:5306/mydb"\n`; // 5306 사용
+}
       
       await fs.appendFile(envPath, dbUrlContent);
     }
