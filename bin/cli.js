@@ -14,8 +14,8 @@ const __dirname = path.dirname(__filename);
 async function run() {
   console.clear();
   
-  // 1. 시작 인사 (v1.2.2 버전 반영)
-  p.intro(`${chalk.bgBlue.white(' create-express-esm ')} ${chalk.dim('v1.2.2')}`);
+  // 1. 시작 인사 (v1.2.4 버전 반영)
+  p.intro(`${chalk.bgBlue.white(' create-express-esm ')} ${chalk.dim('v1.2.4')}`);
 
   try {
     // 2. 사용자 질문 그룹
@@ -45,10 +45,9 @@ async function run() {
           }),
         useDb: () =>
           p.confirm({
-            message: 'Prisma ORM 및 전역 에러 핸들링을 추가하시겠습니까?',
+            message: 'Prisma ORM 및 데이터베이스 환경을 추가하시겠습니까?',
             initialValue: false,
           }),
-        // [New] DB 타입 선택 (useDb가 true일 때만 실행)
         dbType: ({ results }) => {
           if (!results.useDb) return;
           return p.select({
@@ -77,95 +76,82 @@ async function run() {
 
     // 3. 파일 구성 시작
     const s = p.spinner();
-    s.start('프로젝트 템플릿을 복사하는 중...');
+    s.start('프로젝트 템플릿을 생성하는 중...');
 
-    // 기본 언어 템플릿 복사
+    // (1) 기본 언어 템플릿 복사 (js 또는 ts)
     await fs.copy(templatePath, targetPath);
 
-    // 도트 파일 변환 (_env -> .env 등)
-    const renameMap = {
-      'gitignore': '.gitignore',
-      '_gitignore': '.gitignore',
-      '_env': '.env'
-    };
-
-    for (const [oldName, newName] of Object.entries(renameMap)) {
-      const oldFilePath = path.join(targetPath, oldName);
-      if (await fs.pathExists(oldFilePath)) {
-        await fs.move(oldFilePath, path.join(targetPath, newName), { overwrite: true });
+    // (2) 도트 파일 변환 (_env -> .env 등)
+    const dotFiles = ['gitignore', '_gitignore', '_env'];
+    for (const f of dotFiles) {
+      const oldPath = path.join(targetPath, f);
+      if (await fs.pathExists(oldPath)) {
+        const newName = f.startsWith('_') ? f.replace('_', '.') : `.${f}`;
+        await fs.move(oldPath, path.join(targetPath, newName), { overwrite: true });
+        // .env 파일 생성 시 .env.example도 같이 생성
         if (newName === '.env') {
           await fs.copy(path.join(targetPath, '.env'), path.join(targetPath, '.env.example'));
         }
       }
     }
 
-    // 4. DB 및 에러 핸들링 선택 시 추가 파일 복사 및 코드 주입
+    // 4. DB 선택 시 기능 병합 (Common 소스 복사)
     if (useDb) {
-      // (1) Prisma 설정 및 Docker Compose 복사 (선택한 DB 타입에 맞춤)
+      // (1) Prisma & Docker 설정 복사
       await fs.ensureDir(path.join(targetPath, 'prisma'));
-      
-      const prismaTemplate = `schema.prisma.${dbType}`;
-      const dockerTemplate = `docker-compose.yml.${dbType}`;
-
       await fs.copy(
-        path.join(commonPath, 'prisma', prismaTemplate), 
+        path.join(commonPath, 'prisma', `schema.prisma.${dbType}`),
         path.join(targetPath, 'prisma', 'schema.prisma')
       );
-      
       await fs.copy(
-        path.join(commonPath, dockerTemplate), 
+        path.join(commonPath, `docker-compose.yml.${dbType}`),
         path.join(targetPath, 'docker-compose.yml')
       );
 
-      // (2) 소스 코드 복사 (기존 로직 유지)
-      const sourceFolders = ['lib', 'services', 'controllers', 'routes', 'utils', 'middlewares'];
-      for (const folder of sourceFolders) {
-        const srcFolderPath = path.join(commonPath, 'src', folder);
-        const destFolderPath = path.join(targetPath, 'src', folder);
-        
-        if (await fs.pathExists(srcFolderPath)) {
-          await fs.ensureDir(destFolderPath);
-          const files = await fs.readdir(srcFolderPath);
-          for (const file of files) {
-            if (file.endsWith(`.${language}`)) {
-              await fs.copy(path.join(srcFolderPath, file), path.join(destFolderPath, file));
-            }
-          }
-        }
+      // (2) ⭐ [핵심 수정] 언어별 Common 소스 코드 병합
+      // template/common/src/js (또는 ts) 폴더 내부를 target/src로 병합 복사
+      const commonSrcPath = path.join(commonPath, 'src', language);
+      if (await fs.pathExists(commonSrcPath)) {
+        await fs.copy(commonSrcPath, path.join(targetPath, 'src'), { 
+          overwrite: true,
+          errorOnExist: false 
+        });
       }
 
       // (3) app.ts / app.js 에 코드 주입
       const mainFilePath = path.join(targetPath, `src/app.${language}`);
       if (await fs.pathExists(mainFilePath)) {
         let content = await fs.readFile(mainFilePath, 'utf-8');
-        const imports = [
-          `import userRoutes from './routes/userRoutes.js';`,
-          `import { errorHandler } from './middlewares/errorMiddleware.js';`
-        ].join('\n');
-        content = imports + '\n' + content;
-        content = content.replace('app.use(express.json());', `app.use(express.json());\napp.use('/users', userRoutes);`);
-        const errorMiddlewareCode = `\n// 전역 에러 핸들러\napp.use(errorHandler);\n`;
-        content = content.includes('export default app;') 
-          ? content.replace('export default app;', `${errorMiddlewareCode}\nexport default app;`)
-          : content + `\n${errorMiddlewareCode}`;
-        await fs.writeFile(mainFilePath, content);
+        
+        // 중복 주입 방지 체크
+        if (!content.includes('userRoutes')) {
+          const imports = [
+            `import userRoutes from './routes/userRoutes.js';`,
+            `import { errorHandler } from './middlewares/errorMiddleware.js';`
+          ].join('\n');
+          
+          content = imports + '\n' + content;
+          // express.json() 다음에 라우터 연결
+          content = content.replace(/app\.use\(express\.json\(\)\);?/g, (match) => {
+            return `${match}\napp.use('/api/users', userRoutes);`;
+          });
+          // export default 앞에 에러 핸들러 연결
+          const errorMiddlewareCode = `\n// 전역 에러 핸들러\napp.use(errorHandler);\n`;
+          content = content.replace(/export default app;?/g, `${errorMiddlewareCode}\nexport default app;`);
+          
+          await fs.writeFile(mainFilePath, content);
+        }
       }
 
       // (4) .env 파일에 DB 타입별 DATABASE_URL 추가
       const envPath = path.join(targetPath, '.env');
-      let dbUrlContent = '';
-      
-      if (dbType === 'postgresql') {
-        dbUrlContent = `\n# PostgreSQL Connection\nDATABASE_URL="postgresql://myuser:mypassword@localhost:5433/mydb?schema=public"\n`;
-      } else if (dbType === 'mysql') {
-        dbUrlContent = `\n# MySQL Connection\nDATABASE_URL="mysql://root:mypassword@localhost:4306/mydb"\n`;
-      } else if (dbType === 'mariadb') {
-        dbUrlContent = `\n# MariaDB Connection\nDATABASE_URL="mysql://root:mypassword@localhost:5306/mydb"\n`; // 5306 사용
-      } else if (dbType === 'mongodb') {
-        dbUrlContent = `\n# MongoDB Connection\nDATABASE_URL="mongodb://root:mypassword@localhost:27017/mydb?authSource=admin"\n`;
-      } 
-      
-      await fs.appendFile(envPath, dbUrlContent);
+      const dbUrls = {
+        postgresql: 'postgresql://myuser:mypassword@localhost:5433/mydb?schema=public',
+        mysql: 'mysql://root:mypassword@localhost:4306/mydb',
+        mariadb: 'mysql://root:mypassword@localhost:5306/mydb',
+        mongodb: 'mongodb://root:mypassword@localhost:27017/mydb?authSource=admin'
+      };
+      await fs.appendFile(envPath, `\n# Database Connection\nDATABASE_URL="${dbUrls[dbType]}"\n`);
     }
 
     // 5. package.json 동적 최적화
@@ -183,8 +169,6 @@ async function run() {
       await fs.remove(path.join(targetPath, `vitest.config.${configExt}`));
       await fs.remove(path.join(targetPath, `src/app.test.${configExt}`));
       delete pkg.scripts.test;
-      delete pkg.scripts["test:ui"];
-      delete pkg.scripts["test:run"];
       delete pkg.devDependencies.vitest;
       delete pkg.devDependencies.supertest;
     }
@@ -192,14 +176,12 @@ async function run() {
     if (useDb) {
       pkg.scripts["db:up"] = "docker-compose up -d";
       pkg.scripts["db:push"] = "prisma db push";
-      pkg.scripts["prisma:generate"] = "prisma generate";
-      pkg.scripts["prisma:studio"] = "prisma studio";
       pkg.dependencies["@prisma/client"] = "^5.0.0";
       pkg.devDependencies["prisma"] = "^5.0.0";
     }
 
     await fs.writeJson(pkgPath, pkg, { spaces: 2 });
-    s.stop('파일 구성 완료!');
+    s.stop('프로젝트 파일 구성 완료!');
 
     // 6. 의존성 설치
     const installSpinner = p.spinner();
@@ -208,14 +190,14 @@ async function run() {
       execSync('npm install', { cwd: targetPath, stdio: 'ignore' });
       installSpinner.stop('설치 완료!');
     } catch (e) {
-      installSpinner.stop(chalk.red('설치 실패 (수동 설치가 필요할 수 있습니다)'));
+      installSpinner.stop(chalk.red('설치 실패 (수동으로 npm install을 실행해 주세요)'));
     }
 
-    // 7. 마무리
+    // 7. 마무리 안내
     let nextSteps = `cd ${projectName}\n`;
     if (useDb) {
-      nextSteps += `${chalk.bold('npm run db:up')} (DB 실행)\n`;
-      nextSteps += `${chalk.bold('npm run db:push')} (테이블 생성)\n`;
+      nextSteps += `${chalk.bold('npm run db:up')} (Docker 실행)\n`;
+      nextSteps += `${chalk.bold('npm run db:push')} (DB 스키마 반영)\n`;
     }
     nextSteps += `npm run dev`;
 
