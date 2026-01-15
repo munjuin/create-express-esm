@@ -14,8 +14,8 @@ const __dirname = path.dirname(__filename);
 async function run() {
   console.clear();
   
-  // 1. 시작 인사
-  p.intro(`${chalk.bgBlue.white(' create-express-esm ')} ${chalk.dim('v1.2.0-beta')}`);
+  // 1. 시작 인사 (v1.2.2 버전 반영)
+  p.intro(`${chalk.bgBlue.white(' create-express-esm ')} ${chalk.dim('v1.2.2')}`);
 
   try {
     // 2. 사용자 질문 그룹
@@ -45,9 +45,20 @@ async function run() {
           }),
         useDb: () =>
           p.confirm({
-            message: 'Prisma ORM (PostgreSQL) 및 전역 에러 핸들링을 추가하시겠습니까?',
+            message: 'Prisma ORM 및 전역 에러 핸들링을 추가하시겠습니까?',
             initialValue: false,
           }),
+        // [New] DB 타입 선택 (useDb가 true일 때만 실행)
+        dbType: ({ results }) => {
+          if (!results.useDb) return;
+          return p.select({
+            message: '사용할 데이터베이스를 선택하세요:',
+            options: [
+              { value: 'postgresql', label: 'PostgreSQL' },
+              { value: 'mysql', label: 'MySQL' },
+            ],
+          });
+        },
       },
       {
         onCancel: () => {
@@ -57,7 +68,7 @@ async function run() {
       }
     );
 
-    const { projectName, language, useTest, useDb } = project;
+    const { projectName, language, useTest, useDb, dbType } = project;
     const targetPath = path.join(process.cwd(), projectName);
     const templatePath = path.join(__dirname, '../template', language);
     const commonPath = path.join(__dirname, '../template/common');
@@ -88,11 +99,23 @@ async function run() {
 
     // 4. DB 및 에러 핸들링 선택 시 추가 파일 복사 및 코드 주입
     if (useDb) {
-      // (1) Prisma 설정 및 Docker Compose 복사
-      await fs.copy(path.join(commonPath, 'prisma'), path.join(targetPath, 'prisma'));
-      await fs.copy(path.join(commonPath, 'docker-compose.yml'), path.join(targetPath, 'docker-compose.yml'));
+      // (1) Prisma 설정 및 Docker Compose 복사 (선택한 DB 타입에 맞춤)
+      await fs.ensureDir(path.join(targetPath, 'prisma'));
+      
+      const prismaTemplate = `schema.prisma.${dbType}`;
+      const dockerTemplate = `docker-compose.yml.${dbType}`;
 
-      // (2) 소스 코드 복사 (lib, services, controllers, routes, utils, middlewares)
+      await fs.copy(
+        path.join(commonPath, 'prisma', prismaTemplate), 
+        path.join(targetPath, 'prisma', 'schema.prisma')
+      );
+      
+      await fs.copy(
+        path.join(commonPath, dockerTemplate), 
+        path.join(targetPath, 'docker-compose.yml')
+      );
+
+      // (2) 소스 코드 복사 (기존 로직 유지)
       const sourceFolders = ['lib', 'services', 'controllers', 'routes', 'utils', 'middlewares'];
       for (const folder of sourceFolders) {
         const srcFolderPath = path.join(commonPath, 'src', folder);
@@ -102,7 +125,6 @@ async function run() {
           await fs.ensureDir(destFolderPath);
           const files = await fs.readdir(srcFolderPath);
           for (const file of files) {
-            // 사용자가 선택한 언어(ts/js)와 일치하는 파일만 복사
             if (file.endsWith(`.${language}`)) {
               await fs.copy(path.join(srcFolderPath, file), path.join(destFolderPath, file));
             }
@@ -110,39 +132,33 @@ async function run() {
         }
       }
 
-      // (3) app.ts / app.js 에 코드 주입 (중요!)
+      // (3) app.ts / app.js 에 코드 주입
       const mainFilePath = path.join(targetPath, `src/app.${language}`);
       if (await fs.pathExists(mainFilePath)) {
         let content = await fs.readFile(mainFilePath, 'utf-8');
-        
-        // 상단 임포트 주입
         const imports = [
           `import userRoutes from './routes/userRoutes.js';`,
           `import { errorHandler } from './middlewares/errorMiddleware.js';`
         ].join('\n');
         content = imports + '\n' + content;
-
-        // 라우터 등록 주입 (express.json() 뒤에)
-        const routeCode = `\napp.use('/users', userRoutes);`;
-        content = content.replace('app.use(express.json());', `app.use(express.json());${routeCode}`);
-
-        // 전역 에러 핸들러 주입 (서버 실행 직전에)
-        const errorMiddlewareCode = `\n// 전역 에러 핸들러 (모든 라우터 다음에 위치해야 함)\napp.use(errorHandler);\n`;
-        if (content.includes('export default app;')) {
-          content = content.replace('export default app;', `${errorMiddlewareCode}\nexport default app;`);
-        } else {
-          content += `\n${errorMiddlewareCode}`;
-        }
-
+        content = content.replace('app.use(express.json());', `app.use(express.json());\napp.use('/users', userRoutes);`);
+        const errorMiddlewareCode = `\n// 전역 에러 핸들러\napp.use(errorHandler);\n`;
+        content = content.includes('export default app;') 
+          ? content.replace('export default app;', `${errorMiddlewareCode}\nexport default app;`)
+          : content + `\n${errorMiddlewareCode}`;
         await fs.writeFile(mainFilePath, content);
       }
 
-      // (4) .env 파일에 DATABASE_URL 추가
+      // (4) .env 파일에 DB 타입별 DATABASE_URL 추가
       const envPath = path.join(targetPath, '.env');
-      const dbUrlContent = `
-# PostgreSQL Connection (Docker Compose default)
-DATABASE_URL="postgresql://myuser:mypassword@localhost:5432/mydb?schema=public"
-`;
+      let dbUrlContent = '';
+      
+      if (dbType === 'postgresql') {
+        dbUrlContent = `\n# PostgreSQL Connection\nDATABASE_URL="postgresql://myuser:mypassword@localhost:5433/mydb?schema=public"\n`;
+      } else if (dbType === 'mysql') {
+        dbUrlContent = `\n# MySQL Connection\nDATABASE_URL="mysql://root:mypassword@localhost:3307/mydb"\n`;
+      }
+      
       await fs.appendFile(envPath, dbUrlContent);
     }
 
@@ -156,27 +172,22 @@ DATABASE_URL="postgresql://myuser:mypassword@localhost:5432/mydb?schema=public"
       pkg.devDependencies["tsx"] = "^4.7.0";
     }
 
-    // 테스트 환경 설정 (비사용 시 관련 파일 및 패키지 제거)
     if (!useTest) {
       const configExt = language === 'ts' ? 'ts' : 'js';
-      const testFileExt = language === 'ts' ? 'ts' : 'js';
       await fs.remove(path.join(targetPath, `vitest.config.${configExt}`));
-      await fs.remove(path.join(targetPath, `src/app.test.${testFileExt}`));
+      await fs.remove(path.join(targetPath, `src/app.test.${configExt}`));
       delete pkg.scripts.test;
       delete pkg.scripts["test:ui"];
       delete pkg.scripts["test:run"];
       delete pkg.devDependencies.vitest;
       delete pkg.devDependencies.supertest;
-      if (pkg.devDependencies["@types/supertest"]) delete pkg.devDependencies["@types/supertest"];
     }
 
-    // DB 의존성 및 스크립트 추가
     if (useDb) {
       pkg.scripts["db:up"] = "docker-compose up -d";
       pkg.scripts["db:push"] = "prisma db push";
       pkg.scripts["prisma:generate"] = "prisma generate";
       pkg.scripts["prisma:studio"] = "prisma studio";
-      
       pkg.dependencies["@prisma/client"] = "^5.0.0";
       pkg.devDependencies["prisma"] = "^5.0.0";
     }
@@ -187,7 +198,6 @@ DATABASE_URL="postgresql://myuser:mypassword@localhost:5432/mydb?schema=public"
     // 6. 의존성 설치
     const installSpinner = p.spinner();
     installSpinner.start('의존성 패키지를 설치하는 중... (npm install)');
-    
     try {
       execSync('npm install', { cwd: targetPath, stdio: 'ignore' });
       installSpinner.stop('설치 완료!');
